@@ -10,8 +10,8 @@ static const uint16_t kCompanyId = 0xFFFF;
 static const uint32_t kTagId = 10321;
 
 // 광고 -> light sleep -> 광고 ... 반복 (약 1초 주기, 초당 광고 1회)
-// 깨어나서 광고 패킷을 내보내는 시간
-static const uint32_t kAdvOnTimeMs     = 100;
+// 깨어나서 광고 패킷을 내보내는 시간 (한 번의 광고 이벤트면 충분하므로 짧게)
+static const uint32_t kAdvOnTimeMs     = 40;
 // light sleep 시간: (1초 주기) - (광고 시간)
 static const uint64_t kSleepDurationUs = (1000ULL - kAdvOnTimeMs) * 1000ULL;
 
@@ -57,29 +57,28 @@ void start_ble_advertising() {
   static bool inited = false;
   if (!inited) {
     BLEDevice::init(kDeviceName);
-    BLEServer* server = BLEDevice::createServer();
-    (void)server;
     inited = true;
   }
 
   gAdvertising = BLEDevice::getAdvertising();
   gAdvertising->stop();
 
-  BLEAdvertisementData advData;
-  BLEAdvertisementData scanResp;
+  // 순수 브로드캐스트 비콘: 연결 불가 + 스캔 응답 없음
+  // (광고 패킷마다 따라오던 RX 수신 윈도우가 사라져 전력 절감)
+  gAdvertising->setAdvertisementType(ADV_TYPE_NONCONN_IND);
+  gAdvertising->setScanResponse(false);
 
+  BLEAdvertisementData advData;
   advData.setName(kDeviceName);
-  scanResp.setName(kDeviceName);
 
   std::string mfg = buildManufacturerData();
   String mfgStr(mfg.data(), (unsigned int)mfg.size());
   advData.setManufacturerData(mfgStr);
 
   gAdvertising->setAdvertisementData(advData);
-  gAdvertising->setScanResponseData(scanResp);
 
   gAdvertising->start();
-  Serial.println("[BLE] Advertising started");
+  Serial.println("[BLE] Advertising started (non-connectable broadcast)");
 }
 
 void stop_ble_advertising() {
