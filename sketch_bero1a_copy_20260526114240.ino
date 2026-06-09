@@ -2,25 +2,27 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEAdvertising.h>
+#include <esp_sleep.h>
 
 // ======================= 설정값 =======================
 static const char*  kDeviceName = "BeRo-C6";
 static const uint16_t kCompanyId = 0xFFFF;
 static const uint32_t kTagId = 10321;
 
-// 광고 시간: 60초
-static const uint32_t kAdvDurationMs     = 60UL * 1000UL;
-// 종료 10초 전부터 점멸
-static const uint32_t kBlinkBeforeEndMs  = 10UL * 1000UL;
+// 광고 -> light sleep -> 광고 ... 반복 (약 1초 주기, 초당 광고 1회)
+// 깨어나서 광고 패킷을 내보내는 시간
+static const uint32_t kAdvOnTimeMs     = 100;
+// light sleep 시간: (1초 주기) - (광고 시간)
+static const uint64_t kSleepDurationUs = (1000ULL - kAdvOnTimeMs) * 1000ULL;
 
 // ======================= 핀 설정 =======================
-// "빨간 LED"가 연결된 핀으로 맞추기
-static const int  LED_RED_PIN = 8;
+// "파란 LED"가 연결된 핀으로 맞추기
+static const int  LED_BLUE_PIN = 8;
 static const bool LED_ACTIVE_LOW = false;
 
-static inline void redLedWrite(bool on) {
-  if (LED_ACTIVE_LOW) digitalWrite(LED_RED_PIN, on ? LOW : HIGH);
-  else                digitalWrite(LED_RED_PIN, on ? HIGH : LOW);
+static inline void blueLedWrite(bool on) {
+  if (LED_ACTIVE_LOW) digitalWrite(LED_BLUE_PIN, on ? LOW : HIGH);
+  else                digitalWrite(LED_BLUE_PIN, on ? HIGH : LOW);
 }
 
 BLEAdvertising* gAdvertising = nullptr;
@@ -50,6 +52,7 @@ std::string buildManufacturerData() {
 }
 
 // ======================= advertising 시작/정지 =======================
+// light sleep은 RAM을 유지하므로 BLEDevice::init은 (inited 가드 덕분에) 최초 1회만 실행됨.
 void start_ble_advertising() {
   static bool inited = false;
   if (!inited) {
@@ -85,75 +88,32 @@ void stop_ble_advertising() {
   Serial.println("[BLE] Advertising stopped");
 }
 
-// ======================= 상태 머신 =======================
-enum class State { ADVERTISING, EXPIRED };
-static State gState = State::ADVERTISING;
-static uint32_t gAdvStartMs = 0;
-
-void startOneMinuteCycle() {
-  start_ble_advertising();
-  gAdvStartMs = millis();
-  gState = State::ADVERTISING;
-  redLedWrite(false);
-  Serial.println("[STATE] 1-minute advertising cycle started");
-}
-
 // ======================= Arduino =======================
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(LED_RED_PIN, OUTPUT);
-  redLedWrite(false);
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  blueLedWrite(false);
 
   Serial.println();
-  Serial.println("=== BeRo: power/reset -> 1min adv, blink last 10s, then red blink forever ===");
-
-  // 전원/리셋 시 자동 시작
-  startOneMinuteCycle();
+  Serial.println("=== BeRo: advertise -> light sleep -> repeat (~1s cycle) ===");
 }
 
+// light sleep은 깨어난 뒤 다음 줄부터 계속 실행되므로 loop()로 반복한다.
 void loop() {
-  const uint32_t now = millis();
+  // 광고 중에만 파란 LED ON
+  blueLedWrite(true);
+  start_ble_advertising();
 
-  if (gState == State::ADVERTISING) {
-    const uint32_t elapsed = now - gAdvStartMs;
-    const uint32_t remain  = (elapsed >= kAdvDurationMs) ? 0 : (kAdvDurationMs - elapsed);
+  // 광고 패킷이 나갈 시간을 잠깐 확보
+  delay(kAdvOnTimeMs);
 
-    if (remain == 0) {
-      stop_ble_advertising();
-      gState = State::EXPIRED;
-      Serial.println("[STATE] Expired -> red blink forever (press RESET to restart)");
-      return;
-    }
+  // 광고 정지 + 파란 LED OFF
+  stop_ble_advertising();
+  blueLedWrite(false);
 
-    // 종료 10초 전: 0.5초 점멸
-    if (remain <= kBlinkBeforeEndMs) {
-      static uint32_t lastBlinkMs = 0;
-      static bool ledState = false;
-      if (now - lastBlinkMs >= 500) {
-        lastBlinkMs = now;
-        ledState = !ledState;
-        redLedWrite(ledState);
-      }
-    } else {
-      // 그 전엔 꺼둠
-      redLedWrite(false);
-    }
-
-    delay(10);
-    return;
-  }
-
-  // EXPIRED: 빨간 LED 무한 점멸 (0.5초 간격)
-  {
-    static uint32_t lastBlinkMs = 0;
-    static bool ledState = false;
-    if (now - lastBlinkMs >= 500) {
-      lastBlinkMs = now;
-      ledState = !ledState;
-      redLedWrite(ledState);
-    }
-    delay(10);
-  }
+  // 남은 시간 동안 light sleep (RAM/BLE 컨트롤러 유지) 후 다시 광고
+  esp_sleep_enable_timer_wakeup(kSleepDurationUs);
+  esp_light_sleep_start();
 }
