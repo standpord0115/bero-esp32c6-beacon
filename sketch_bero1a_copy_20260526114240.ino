@@ -65,7 +65,7 @@ void start_ble_advertising() {
 
   // 순수 브로드캐스트 비콘: 연결 불가 + 스캔 응답 없음
   // (광고 패킷마다 따라오던 RX 수신 윈도우가 사라져 전력 절감)
-  gAdvertising->setAdvertisementType(ADV_TYPE_NONCONN_IND);
+  gAdvertising->setAdvertisementType(BLE_HCI_ADV_TYPE_ADV_NONCONN_IND);
   gAdvertising->setScanResponse(false);
 
   BLEAdvertisementData advData;
